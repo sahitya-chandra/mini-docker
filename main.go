@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"syscall"
 )
 
@@ -31,7 +32,7 @@ func run() {
 	cmd := exec.Command("/proc/self/exe", append([]string{"child"}, os.Args[2:]...)...)
 
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags: syscall.CLONE_NEWUTS,
+		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS,
 	}
 
 	cmd.Stdin = os.Stdin
@@ -43,15 +44,43 @@ func run() {
 }
 
 func child() {
-	cmd := os.Args[2]
+	// cmd := os.Args[2]
 	args := os.Args[2:]
-	fmt.Println("CHILD PID =", os.Getpid())
 	fmt.Println("Running inside child")
 
-
 	syscall.Sethostname([]byte("container"))
+	syscall.Mount("", "/", "", syscall.MS_PRIVATE|syscall.MS_REC, "")
+	syscall.Mount("proc", "/proc", "proc", 0, "")
 
-	fmt.Println("CHILD PID =", os.Getpid())
-	syscall.Exec(cmd, args, os.Environ())
+	// syscall.Exec(cmd, args, os.Environ())
+	pid, _ := syscall.ForkExec(
+		args[0],
+		args,
+		&syscall.ProcAttr{
+			Files: []uintptr{
+				os.Stdin.Fd(),
+				os.Stdout.Fd(),
+				os.Stderr.Fd(),
+			},
+		},
+	)
+
+	syscall.Setpgid(pid, pid)
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT, syscall.SIGQUIT)
+
+	fmt.Println("Init PID:", os.Getpid(), "Child PID:", pid)
+	
+	go func() {
+		for sig := range sigCh {
+			syscall.Kill(pid, sig.(syscall.Signal))
+		}
+	}()
+		
+	var ws syscall.WaitStatus
+	syscall.Wait4(pid, &ws, 0, nil)
+	os.Exit(ws.ExitStatus())
+
 
 }
