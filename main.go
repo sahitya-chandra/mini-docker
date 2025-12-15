@@ -2,9 +2,11 @@ package main
 
 import (
 	"fmt"
+	"golang.org/x/sys/unix"
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
 )
 
@@ -52,8 +54,13 @@ func child() {
 	syscall.Mount("", "/", "", syscall.MS_PRIVATE|syscall.MS_REC, "")
 	syscall.Mount("proc", "/proc", "proc", 0, "")
 
+	if !strings.HasPrefix(args[0], "/") {
+		fmt.Println("Error: command must be an absolute path")
+		os.Exit(1)
+	}
+
 	// syscall.Exec(cmd, args, os.Environ())
-	pid, _ := syscall.ForkExec(
+	pid, err := syscall.ForkExec(
 		args[0],
 		args,
 		&syscall.ProcAttr{
@@ -65,7 +72,12 @@ func child() {
 		},
 	)
 
+	if err != nil {
+		panic(err)
+	}
+
 	syscall.Setpgid(pid, pid)
+	unix.IoctlSetInt(int(os.Stdin.Fd()), unix.TIOCSPGRP, pid)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT, syscall.SIGQUIT)
@@ -80,7 +92,8 @@ func child() {
 		
 	var ws syscall.WaitStatus
 	syscall.Wait4(pid, &ws, 0, nil)
-	os.Exit(ws.ExitStatus())
 
+	unix.IoctlSetInt(int(os.Stdin.Fd()), unix.TIOCSPGRP, os.Getpid())
+	os.Exit(ws.ExitStatus())
 
 }
