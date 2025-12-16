@@ -34,7 +34,7 @@ func run() {
 	cmd := exec.Command("/proc/self/exe", append([]string{"child"}, os.Args[2:]...)...)
 
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS,
+		Cloneflags: syscall.CLONE_NEWUSER | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS | syscall.CLONE_NEWUTS,
 	}
 
 	cmd.Stdin = os.Stdin
@@ -59,6 +59,14 @@ func child() {
 		os.Exit(1)
 	}
 
+	ttyFD := int(os.Stdin.Fd())
+
+	origPgrp, err := unix.IoctlGetInt(ttyFD, unix.TIOCGPGRP)
+	if err != nil {
+		panic(err)
+	}
+
+
 	// syscall.Exec(cmd, args, os.Environ())
 	pid, err := syscall.ForkExec(
 		args[0],
@@ -76,8 +84,9 @@ func child() {
 		panic(err)
 	}
 
+	syscall.Setsid()
 	syscall.Setpgid(pid, pid)
-	unix.IoctlSetInt(int(os.Stdin.Fd()), unix.TIOCSPGRP, pid)
+	unix.IoctlSetInt(ttyFD, unix.TIOCSPGRP, pid)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT, syscall.SIGQUIT)
@@ -90,10 +99,26 @@ func child() {
 		}
 	}()
 		
-	var ws syscall.WaitStatus
-	syscall.Wait4(pid, &ws, 0, nil)
+	var exitCode int
 
-	unix.IoctlSetInt(int(os.Stdin.Fd()), unix.TIOCSPGRP, os.Getpid())
-	os.Exit(ws.ExitStatus())
+	for {
+		var ws syscall.WaitStatus
+		wpid, err := syscall.Wait4(-1, &ws, 0, nil)
+		if err != nil {
+			break
+		}
+
+		if wpid == pid {
+			if ws.Exited() {
+				exitCode = ws.ExitStatus()
+			} else if ws.Signaled() {
+				exitCode = 128 + int(ws.Signal())
+			}
+			break
+		}
+	}
+
+	unix.IoctlSetInt(ttyFD, unix.TIOCSPGRP, origPgrp)
+	os.Exit(exitCode)
 
 }
