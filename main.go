@@ -34,7 +34,9 @@ func run() {
 	cmd := exec.Command("/proc/self/exe", append([]string{"child"}, os.Args[2:]...)...)
 
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags: syscall.CLONE_NEWUSER | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS | syscall.CLONE_NEWUTS,
+		Cloneflags: 
+			syscall.CLONE_NEWUSER | 
+			syscall.CLONE_NEWPID | syscall.CLONE_NEWNS | syscall.CLONE_NEWUTS,
 	}
 
 	cmd.Stdin = os.Stdin
@@ -42,7 +44,30 @@ func run() {
 	cmd.Stderr = os.Stderr
 
 	fmt.Println("RUN PID =", os.Getpid())
-	cmd.Run()
+	
+	cmd.Start()
+	pid := cmd.Process.Pid
+	fmt.Println("Child PID:", pid)
+	fmt.Println("Host UID:", os.Getuid(), "Host GID:", os.Getgid())
+
+	uidMap := fmt.Sprintf("0 %d 1\n", os.Getuid())
+	err := os.WriteFile(fmt.Sprintf("/proc/%d/uid_map", pid), []byte(uidMap), 0)
+	if err != nil {
+		panic(err)
+	}
+
+	err = os.WriteFile(fmt.Sprintf("/proc/%d/setgroups", pid), []byte("deny"), 0)
+	if err != nil {
+		panic(err)
+	}
+
+	gidMap := fmt.Sprintf("0 %d 1\n", os.Getgid())
+	err = os.WriteFile(fmt.Sprintf("/proc/%d/gid_map", pid), []byte(gidMap), 0)
+	if err != nil {
+		panic(err)
+	}
+
+	cmd.Wait()
 }
 
 func child() {
