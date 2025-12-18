@@ -35,7 +35,7 @@ func run() {
 
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Cloneflags: 
-			syscall.CLONE_NEWUSER | 
+			// syscall.CLONE_NEWUSER | 
 			syscall.CLONE_NEWPID | syscall.CLONE_NEWNS | syscall.CLONE_NEWUTS,
 	}
 
@@ -44,30 +44,37 @@ func run() {
 	cmd.Stderr = os.Stderr
 
 	fmt.Println("RUN PID =", os.Getpid())
+	cwd, err := os.Getwd()
+	if err != nil {
+		panic(err)
+	}
+	cmd.Dir = cwd
+
+	cmd.Run()
 	
-	cmd.Start()
-	pid := cmd.Process.Pid
-	fmt.Println("Child PID:", pid)
-	fmt.Println("Host UID:", os.Getuid(), "Host GID:", os.Getgid())
+	// cmd.Start()
+	// pid := cmd.Process.Pid
+	// fmt.Println("Child PID:", pid)
+	// fmt.Println("Host UID:", os.Getuid(), "Host GID:", os.Getgid())
 
-	uidMap := fmt.Sprintf("0 %d 1\n", os.Getuid())
-	err := os.WriteFile(fmt.Sprintf("/proc/%d/uid_map", pid), []byte(uidMap), 0)
-	if err != nil {
-		panic(err)
-	}
+	// uidMap := fmt.Sprintf("0 %d 1\n", os.Getuid())
+	// err := os.WriteFile(fmt.Sprintf("/proc/%d/uid_map", pid), []byte(uidMap), 0)
+	// if err != nil {
+	// 	panic(err)
+	// }
 
-	err = os.WriteFile(fmt.Sprintf("/proc/%d/setgroups", pid), []byte("deny"), 0)
-	if err != nil {
-		panic(err)
-	}
+	// err = os.WriteFile(fmt.Sprintf("/proc/%d/setgroups", pid), []byte("deny"), 0)
+	// if err != nil {
+	// 	panic(err)
+	// }
 
-	gidMap := fmt.Sprintf("0 %d 1\n", os.Getgid())
-	err = os.WriteFile(fmt.Sprintf("/proc/%d/gid_map", pid), []byte(gidMap), 0)
-	if err != nil {
-		panic(err)
-	}
+	// gidMap := fmt.Sprintf("0 %d 1\n", os.Getgid())
+	// err = os.WriteFile(fmt.Sprintf("/proc/%d/gid_map", pid), []byte(gidMap), 0)
+	// if err != nil {
+	// 	panic(err)
+	// }
 
-	cmd.Wait()
+	// cmd.Wait()
 }
 
 func child() {
@@ -77,7 +84,7 @@ func child() {
 
 	syscall.Sethostname([]byte("container"))
 	syscall.Mount("", "/", "", syscall.MS_PRIVATE|syscall.MS_REC, "")
-	syscall.Mount("proc", "/proc", "proc", 0, "")
+	// syscall.Mount("proc", "/proc", "proc", 0, "")
 
 	if !strings.HasPrefix(args[0], "/") {
 		fmt.Println("Error: command must be an absolute path")
@@ -91,6 +98,38 @@ func child() {
 		panic(err)
 	}
 
+	newRoot := "./rootfs"
+	oldRoot := "./rootfs/oldroot"
+
+	// if err := os.Chdir(newRoot); err != nil {
+	// 	panic(err)
+	// }
+	
+	if err := syscall.Mount(newRoot, newRoot, "", syscall.MS_BIND|syscall.MS_REC, ""); err != nil {
+		panic("bind mount failed: " + err.Error())
+	}
+
+	if err := os.MkdirAll(oldRoot, 0700); err != nil {
+		panic(err)
+	}
+	
+	// pivot using relative paths
+	if err := syscall.PivotRoot(newRoot, oldRoot); err != nil {
+		panic("pivot_root failed: " + err.Error())
+	}
+
+	if err := os.Chdir("/"); err != nil {
+		panic(err)
+	}
+
+	// syscall.Mount("proc", "/proc", "proc", 0, "")
+	// syscall.Mount("sysfs", "/sys", "sysfs", 0, "")
+	// syscall.Mount("tmpfs", "/dev", "tmpfs", 0, "")
+
+	if err := syscall.Unmount("/oldroot", syscall.MNT_DETACH); err != nil {
+		panic(err)
+	}
+	os.RemoveAll("/oldroot")
 
 	// syscall.Exec(cmd, args, os.Environ())
 	pid, err := syscall.ForkExec(
